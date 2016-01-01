@@ -39,7 +39,7 @@
 	rc == -1 ? DC_STATUS_IO : DC_STATUS_TIMEOUT \
 )
 
-#define SZ_MEMORY 32000
+#define SZ_MEMORY 128000
 
 #define RB_LOGBOOK_BEGIN 0x0100
 #define RB_LOGBOOK_END   0x1438
@@ -99,8 +99,8 @@ vms_sentinel_device_open (dc_device_t **out, dc_context_t *context, const char *
 		return DC_STATUS_IO;
 	}
 
-	// Set the serial communication protocol (115200 8N1).
-	rc = serial_configure (device->port, 115200, 8, SERIAL_PARITY_NONE, 1, SERIAL_FLOWCONTROL_NONE);
+	// Set the serial communication protocol (9600 8N1).
+	rc = serial_configure (device->port, 9600, 8, SERIAL_PARITY_NONE, 1, SERIAL_FLOWCONTROL_NONE);
 	if (rc == -1) {
 		ERROR (context, "Failed to set the terminal attributes.");
 		serial_close (device->port);
@@ -184,7 +184,7 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 	device_event_emit (abstract, DC_EVENT_PROGRESS, &progress);
 
 	// Send the command header to the dive computer.
-	const unsigned char command[] = {0x7B, 0x31, 0x32, 0x33, 0x44, 0x42, 0x41, 0x7d};
+	const unsigned char command[] = {0x4d};
 	int n = serial_write (device->port, command, sizeof (command));
 	if (n != sizeof (command)) {
 		ERROR (abstract->context, "Failed to send the command.");
@@ -192,7 +192,7 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 	}
 
 	// Receive the header packet.
-	unsigned char header[7] = {0};
+	unsigned char header[9] = {0};
 	n = serial_read (device->port, header, sizeof (header));
 	if (n != sizeof (header)) {
 		ERROR (abstract->context, "Failed to receive the answer.");
@@ -200,7 +200,7 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 	}
 
 	// Verify the header packet.
-	const unsigned char expected[] = {0x7B, 0x21, 0x44, 0x35, 0x42, 0x33, 0x7d};
+	const unsigned char expected[] = {0x76, 0x65, 0x72, 0x3D, 0x56, 0x30, 0x30, 0x39, 0x41};
 	if (memcmp (header, expected, sizeof (expected)) != 0) {
 		ERROR (abstract->context, "Unexpected answer byte.");
 		return DC_STATUS_PROTOCOL;
@@ -343,7 +343,7 @@ vms_sentinel_extract_dives (dc_device_t *abstract, const unsigned char data[], u
 		if (header < RB_PROFILE_BEGIN || header + 2 > RB_PROFILE_END ||
 			footer < RB_PROFILE_BEGIN || footer + 2 > RB_PROFILE_END)
 		{
-			ERROR (context, "Invalid ringbuffer pointer detected (0x%04x 0x%04x).", header, footer);
+			ERROR (context, "Invalid ringbuffer pointer detected.");
 			free (buffer);
 			return DC_STATUS_DATAFORMAT;
 		}
@@ -352,7 +352,7 @@ vms_sentinel_extract_dives (dc_device_t *abstract, const unsigned char data[], u
 		unsigned int header2 = array_uint16_le (data + footer);
 		unsigned int footer2 = array_uint16_le (data + header);
 		if (header2 != header || footer2 != footer) {
-			ERROR (context, "Invalid ringbuffer pointer detected (0x%04x 0x%04x).", header2, footer2);
+			ERROR (context, "Invalid ringbuffer pointer detected.");
 			free (buffer);
 			return DC_STATUS_DATAFORMAT;
 		}
