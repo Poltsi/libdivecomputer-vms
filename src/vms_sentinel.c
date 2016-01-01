@@ -22,7 +22,7 @@
 #include <string.h> // memcpy, memcmp
 #include <stdlib.h> // malloc, free
 #include <assert.h> // assert
-
+#include <stdio.h>
 #include <libdivecomputer/vms_sentinel.h>
 
 #include "context-private.h"
@@ -192,39 +192,56 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 	}
 
 	// Receive the header packet.
-	unsigned char header[9] = {0};
+	unsigned char header[1] = {0};
 	n = serial_read (device->port, header, sizeof (header));
 	if (n != sizeof (header)) {
+		printf( "Header n is: '%d'\n", n );
 		ERROR (abstract->context, "Failed to receive the answer.");
 		return EXITCODE (n);
 	}
 
 	// Verify the header packet.
-	const unsigned char expected[] = {0x76, 0x65, 0x72, 0x3D, 0x56, 0x30, 0x30, 0x39, 0x41};
+	const unsigned char expected[] = {0x64};
 	if (memcmp (header, expected, sizeof (expected)) != 0) {
 		ERROR (abstract->context, "Unexpected answer byte.");
+		printf( "Unexpected header byte: '%c' integer is: '%d' string is '%s'\n", header, header, header );
 		return DC_STATUS_PROTOCOL;
 	}
 
 	unsigned char *data = dc_buffer_get_data (buffer);
 
 	unsigned int nbytes = 0;
+    unsigned int foo = 0;
+    
 	while (nbytes < SZ_MEMORY) {
+		printf( "Foo: '%d'\n", foo );
+		printf( "nbytes: '%d'\n", nbytes );
+		printf( "SZ_MEMORY: '%d'\n", SZ_MEMORY );
 		// Set the minimum packet size.
 		unsigned int len = 1024;
 
 		// Increase the packet size if more data is immediately available.
 		int available = serial_get_received (device->port);
+		printf( "Available: '%d'\n", available );
+
 		if (available > len)
+		{
 			len = available;
+			printf( "Len modified according to available to: '%d'\n", len );
+		}
 
 		// Limit the packet size to the total size.
 		if (nbytes + len > SZ_MEMORY)
+		{
 			len = SZ_MEMORY - nbytes;
-
+			printf( "Len modified according SZ_MEMORY to: '%d'\n", len );
+		}
 		// Read the packet.
 		n = serial_read (device->port, data + nbytes, len);
-		if (n != len) {
+		if (n != len)
+		{
+			printf( "Data n is: '%d' expected: '%d'\n", n, len );
+			printf( "Data is: '%s'\n", data );
 			ERROR (abstract->context, "Failed to receive the answer.");
 			return EXITCODE (n);
 		}
@@ -234,6 +251,7 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 		device_event_emit (abstract, DC_EVENT_PROGRESS, &progress);
 
 		nbytes += len;
+		foo++;
 	}
 
 	// Receive the trailer packet.
