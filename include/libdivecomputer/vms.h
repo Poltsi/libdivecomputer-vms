@@ -19,10 +19,9 @@
  * MA 02110-1301 USA
  */
 
-#ifndef CRESSI_H
-#define CRESSI_H
+#ifndef VMS_H
+#define VMS_H
 
-#include "cressi_edy.h"
-#include "cressi_leonardo.h"
+#include "vms_sentinel.h"
 
-#endif /* CRESSI_H */
+#endif /* VMS_H */
