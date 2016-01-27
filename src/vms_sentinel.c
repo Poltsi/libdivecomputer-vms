@@ -39,7 +39,7 @@
 	rc == -1 ? DC_STATUS_IO : DC_STATUS_TIMEOUT \
 )
 
-#define SZ_MEMORY 128000
+#define SZ_MEMORY 256000
 
 #define RB_LOGBOOK_BEGIN 0x0100
 #define RB_LOGBOOK_END   0x1438
@@ -183,7 +183,7 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 	progress.maximum = SZ_MEMORY;
 	device_event_emit (abstract, DC_EVENT_PROGRESS, &progress);
 
-	// Send the command header to the dive computer.
+	// Send the command byte (M) to the dive computer.
 	const unsigned char command[] = {0x4d};
 	int n = serial_write (device->port, command, sizeof (command));
 	if (n != sizeof (command)) {
@@ -195,16 +195,17 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 	unsigned char header[1] = {0};
 	n = serial_read (device->port, header, sizeof (header));
 	if (n != sizeof (header)) {
-		printf( "Header n is: '%d'\n", n );
+		printf( "Header n is: '0x%02x'\n", n );
 		ERROR (abstract->context, "Failed to receive the answer.");
 		return EXITCODE (n);
 	}
 
-	// Verify the header packet.
+	// Verify the header packet. This should be (d)
 	const unsigned char expected[] = {0x64};
 	if (memcmp (header, expected, sizeof (expected)) != 0) {
 		ERROR (abstract->context, "Unexpected answer byte.");
-		printf( "Unexpected header byte: '%c' integer is: '%d' string is '%s'\n", header, header, header );
+		printf( "Unexpected header byte: '%c' integer is: '%d' string is '%s' hex is 0x%02x\n",
+                header, header, header, header );
 		return DC_STATUS_PROTOCOL;
 	}
 
@@ -218,7 +219,7 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 		printf( "nbytes: '%d'\n", nbytes );
 		printf( "SZ_MEMORY: '%d'\n", SZ_MEMORY );
 		// Set the minimum packet size.
-		unsigned int len = 1024;
+		unsigned int len = 1;
 
 		// Increase the packet size if more data is immediately available.
 		int available = serial_get_received (device->port);
