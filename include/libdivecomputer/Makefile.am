@@ -56,4 +56,6 @@ libdivecomputer_HEADERS = 	\
 	divesystem.h \
 	divesystem_idive.h \
 	cochran.h \
-	cochran_commander.h
+	cochran_commander.h \
+	vms.h \
+	vms-sentinel.h

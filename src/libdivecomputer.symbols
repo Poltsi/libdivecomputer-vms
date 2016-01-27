@@ -75,6 +75,7 @@ citizen_aqualand_parser_create
 divesystem_idive_parser_create
 divesystem_idive_parser_create2
 cochran_commander_parser_create
+vms_sentinel_parser_create
 
 dc_device_open
 dc_device_close
@@ -183,3 +184,4 @@ citizen_aqualand_device_open
 divesystem_idive_device_open
 divesystem_idive_device_open2
 cochran_commander_device_open
+vms_sentinel_device_open

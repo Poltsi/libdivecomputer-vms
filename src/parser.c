@@ -36,6 +36,7 @@
 #include <libdivecomputer/citizen.h>
 #include <libdivecomputer/divesystem.h>
 #include <libdivecomputer/cochran.h>
+#include <libdivecomputer/vms.h>
 
 #include "context-private.h"
 #include "parser-private.h"
@@ -145,6 +146,9 @@ dc_parser_new_internal (dc_parser_t **out, dc_context_t *context, dc_family_t fa
 		break;
 	case DC_FAMILY_COCHRAN_COMMANDER:
 		rc = cochran_commander_parser_create (&parser, context, model);
+		break;
+	case DC_FAMILY_VMS_SENTINEL:
+		rc = vms_sentinel_parser_create (&parser, context);
 		break;
 	default:
 		return DC_STATUS_INVALIDARGS;

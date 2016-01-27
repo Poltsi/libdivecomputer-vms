@@ -498,6 +498,14 @@
 				RelativePath="..\src\zeagle_n2ition3.c"
 				>
 			</File>
+			<File
+				RelativePath="..\src\vms_sentinel.c"
+				>
+			</File>
+			<File
+				RelativePath="..\src\vms_sentinel_parser.c"
+				>
+			</File>
 		</Filter>
 		<Filter
 			Name="Header Files"
@@ -790,6 +798,14 @@
 			</File>
 			<File
 				RelativePath="..\include\libdivecomputer\zeagle_n2ition3.h"
+				>
+			</File>
+			<File
+				RelativePath="..\include\libdivecomputer\vms.h"
+				>
+			</File>
+			<File
+				RelativePath="..\include\libdivecomputer\vms_sentinel.h"
 				>
 			</File>
 		</Filter>

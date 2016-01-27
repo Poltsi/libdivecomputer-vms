@@ -293,6 +293,8 @@ static const dc_descriptor_t g_descriptors[] = {
 	{"Cochran", "EMC-14",		DC_FAMILY_COCHRAN_COMMANDER, 1},
 	{"Cochran", "EMC-16",		DC_FAMILY_COCHRAN_COMMANDER, 2},
 	{"Cochran", "EMC-20H",		DC_FAMILY_COCHRAN_COMMANDER, 3},
+	/* VMS Sentinel */
+	{"VMS", "Sentinel",		DC_FAMILY_VMS_SENTINEL, 0},
 };
 
 typedef struct dc_descriptor_iterator_t {

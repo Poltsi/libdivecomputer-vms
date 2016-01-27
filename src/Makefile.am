@@ -61,6 +61,7 @@ libdivecomputer_la_SOURCES = \
 	diverite_nitekq.c diverite_nitekq_parser.c \
 	citizen_aqualand.c citizen_aqualand_parser.c \
 	divesystem_idive.c divesystem_idive_parser.c \
+	vms_sentinel.c vms_sentinel_parser.c \
 	ringbuffer.h ringbuffer.c \
 	checksum.h checksum.c \
 	array.h array.c \
