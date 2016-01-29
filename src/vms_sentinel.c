@@ -166,6 +166,7 @@ vms_sentinel_device_set_fingerprint (dc_device_t *abstract, const unsigned char 
 	return DC_STATUS_SUCCESS;
 }
 
+/* This actually reads the list of dives */
 static dc_status_t
 vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 {
@@ -195,7 +196,7 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 	unsigned char header[1] = {0};
 	n = serial_read (device->port, header, sizeof (header));
 	if (n != sizeof (header)) {
-		printf( "Header n is: '0x%02x'\n", n );
+		printf( "Header n is: %d '%s' header size should be '%d'\n", n, header, sizeof( header ) );
 		ERROR (abstract->context, "Failed to receive the answer.");
 		return EXITCODE (n);
 	}
@@ -205,25 +206,24 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 	if (memcmp (header, expected, sizeof (expected)) != 0) {
 		ERROR (abstract->context, "Unexpected answer byte.");
 		printf( "Unexpected header byte: '%c' integer is: '%d' string is '%s' hex is 0x%02x\n",
-                header, header, header, header );
+				header, header, header, header );
 		return DC_STATUS_PROTOCOL;
 	}
 
 	unsigned char *data = dc_buffer_get_data (buffer);
 
 	unsigned int nbytes = 0;
-    unsigned int foo = 0;
-    
+	// This signifies the separator between the dives, line ends with 'd\r\n'
+	const unsigned char dsep[3] = {0x64, 0x0D, 0x0A};
+	// The end of the divelist is marked by '@@P'
+	const unsigned char dend[3] = {0x40, 0x40, 0x50};
+
 	while (nbytes < SZ_MEMORY) {
-		printf( "Foo: '%d'\n", foo );
-		printf( "nbytes: '%d'\n", nbytes );
-		printf( "SZ_MEMORY: '%d'\n", SZ_MEMORY );
 		// Set the minimum packet size.
 		unsigned int len = 1;
 
 		// Increase the packet size if more data is immediately available.
 		int available = serial_get_received (device->port);
-		printf( "Available: '%d'\n", available );
 
 		if (available > len)
 		{
@@ -239,12 +239,29 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 		}
 		// Read the packet.
 		n = serial_read (device->port, data + nbytes, len);
-		if (n != len)
+
+		// Let's see if the end of the data now is equal to the line, dive list limiter or list end
+		// TODO: Make sure we have at least 3 bytes to read
+		if ((strlen(data) > 3) &&
+            (strncmp(data+strlen(data) - 3, dend, 3) == 0))
 		{
-			printf( "Data n is: '%d' expected: '%d'\n", n, len );
-			printf( "Data is: '%s'\n", data );
-			ERROR (abstract->context, "Failed to receive the answer.");
-			return EXITCODE (n);
+			printf( "Dive list end detected:\n'%s'\n", data );
+			printf( "Matched '%s' to '%s'\n", data+strlen(data) - 3, dend );
+			break;
+		}
+		else
+		{
+			if (strncmp(data+strlen(data) - 3, dsep, 3) == 0)
+			{
+				printf( "Dive list separator detected:\n'%s'\n", data );
+			}
+			else
+			{
+				if ( strncmp(data+strlen(data) - 2, "\r\n", 2) == 0)
+				{
+					printf( "Complete line for: '%s'\n", data );
+				}
+			}
 		}
 
 		// Update and emit a progress event.
@@ -252,9 +269,9 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 		device_event_emit (abstract, DC_EVENT_PROGRESS, &progress);
 
 		nbytes += len;
-		foo++;
 	}
 
+    printf( "Data is:\n%s\n", data );
 	// Receive the trailer packet.
 	unsigned char trailer[4] = {0};
 	n = serial_read (device->port, trailer, sizeof (trailer));
