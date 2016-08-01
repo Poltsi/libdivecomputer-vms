@@ -377,7 +377,7 @@ vms_sentinel_extract_dives (dc_device_t *abstract, const unsigned char data[], u
         memset( divelist[ ( numdive - 1 ) ], 0, strsize );
         DEBUG( abstract->context, "Copying divelist entry" );
         strncpy( divelist[ ( numdive - 1 ) ], divestart, ( strsize - 1 ) );
-        divestart = divestart + strsize + 3; /* Move the start pointer to the beginning of next */
+        divestart = divestart + strsize + 2; /* Move the start pointer to the beginning of next */
 		DEBUG( abstract->context, "Start: %d End: %d Length: %d", divestart, diveend, strsize );
     }
     while( diveend != NULL );
