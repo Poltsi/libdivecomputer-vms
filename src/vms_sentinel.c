@@ -118,11 +118,11 @@ vms_sentinel_device_open (dc_device_t **out, dc_context_t *context, const char *
 	}
 
     // If the device is /dev/pts/x then we don't try to clear/set the DTR/RTS as this is a mockup
-    printf( "Device name: '%s'\n", name );
+    DEBUG( context, "Device name: '%s'", name );
 
 	// Clear the DTR and set the RTS line.
     if( ! ( strncmp( name, "/dev/pts/", 9 ) == 0 ) ) {
-        printf( "Real device: '%s'\n", name );
+        DEBUG( context, "Real device: '%s'", name );
         if (serial_set_dtr (device->port, 0) == -1 ||
             serial_set_rts (device->port, 1) == -1) {
             ERROR (context, "Failed to set the DTR/RTS line.");
@@ -131,7 +131,7 @@ vms_sentinel_device_open (dc_device_t **out, dc_context_t *context, const char *
             return DC_STATUS_IO;
         }
     } else {
-        printf( "Probably mockup device: '%s'\n", name );
+        DEBUG( context, "Probably mockup device: '%s'", name );
     }
 
 	serial_sleep (device->port, 100);
@@ -208,7 +208,7 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 	unsigned char header[3] = {0,0,0};
 	n = serial_read (device->port, header, sizeof (header));
 	if (n != sizeof (header)) {
-		DEBUG( abstract->context, "Header n is: %d '%s' header size should be '%d'\n", n, header, sizeof( header ) );
+		DEBUG( abstract->context, "Header n is: %d '%s' header size should be '%d'", n, header, sizeof( header ) );
 		ERROR (abstract->context, "Failed to receive the answer.");
 		return EXITCODE (n);
 	}
@@ -216,7 +216,7 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 	// Verify the header packet. This should be "d\r\n"
 	const unsigned char expected[3] = {0x64, 0x0D, 0x0A};
 	if (memcmp (header, expected, sizeof (expected)) != 0) {
-		DEBUG( abstract->context, "Unexpected header byte: '%c' integer is: '%d' string is '%s' hex is 0x%02x\n",
+		DEBUG( abstract->context, "Unexpected header byte: '%c' integer is: '%d' string is '%s' hex is 0x%02x",
 				header, header, header, header );
 		//return DC_STATUS_PROTOCOL;
 	}
@@ -237,19 +237,19 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 		if (available > len)
 		{
 			len = available;
-			DEBUG( abstract->context, "Len modified according to available to: '%d'\n", len );
+			DEBUG( abstract->context, "Len modified according to available to: '%d'", len );
 		}
 
 		// Limit the packet size to the total size.
 		if (nbytes + len > SZ_MEMORY)
 		{
 			len = SZ_MEMORY - nbytes;
-			DEBUG( abstract->context, "Len modified according SZ_MEMORY to: '%d'\n", len );
+			DEBUG( abstract->context, "Len modified according SZ_MEMORY to: '%d'", len );
 		}
 		// Read the packet.
 		n = serial_read (device->port, data + nbytes, len);
 
-		DEBUG( abstract->context, "Read length: %d\n", n );
+		DEBUG( abstract->context, "Read length: %d", n );
 
         if( ! n )
         {
@@ -260,7 +260,6 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
         if (strncmp(data+strlen(data) - 1, dend, 1) == 0)
 		{
             DEBUG( abstract->context, "Dive list end detected" );
-            printf( "Dive list end detected:\n%s\n", data );
             // We chop off the end character from the data
             data[ strlen( data ) - 1 ] = 0;
             break;
@@ -273,7 +272,7 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 		nbytes += len;
 	}
 
-    printf( "Data is:\n%s\n", data );
+    DEBUG( abstract->context, "Data is:\n%s", data );
     /* Do we need this?
 	// Receive the trailer packet.
 	unsigned char trailer[4] = {0};
@@ -356,14 +355,13 @@ vms_sentinel_extract_dives (dc_device_t *abstract, const unsigned char data[], u
 
     do
     {
-		DEBUG( abstract->context, "Checking dive: %d\n", numdive );
+		DEBUG( abstract->context, "Checking dive: %d", numdive );
         numdive++;
         diveend = strstr( divestart, "d\r\n" );
         DEBUG( abstract->context, "Reallocing divelist" );
         divelist = realloc( divelist, numdive * sizeof( *divelist ) );
 
         int strsize = diveend - divestart;
-		DEBUG( abstract->context, "Start: %d End: %d Length: %d\n", divestart, diveend, strsize );
 
         if( diveend == NULL ) /* if there is only one, or if this is the last dive */
         {
@@ -372,7 +370,7 @@ vms_sentinel_extract_dives (dc_device_t *abstract, const unsigned char data[], u
         }
 
         strsize++;
-		DEBUG( abstract->context, "New string length: %d\n", strsize );
+		DEBUG( abstract->context, "New string length: %d", strsize );
         DEBUG( abstract->context, "Mallocing divelist entry" );
         divelist[ ( numdive - 1 ) ] = malloc( strsize * sizeof( char ) );
         DEBUG( abstract->context, "Resetting divelist entry" );
@@ -380,13 +378,13 @@ vms_sentinel_extract_dives (dc_device_t *abstract, const unsigned char data[], u
         DEBUG( abstract->context, "Copying divelist entry" );
         strncpy( divelist[ ( numdive - 1 ) ], divestart, ( strsize - 1 ) );
         divestart = divestart + strsize + 3; /* Move the start pointer to the beginning of next */
-		DEBUG( abstract->context, "Start: %d End: %d Length: %d\n", divestart, diveend, strsize );
+		DEBUG( abstract->context, "Start: %d End: %d Length: %d", divestart, diveend, strsize );
     }
     while( diveend != NULL );
 
     for( int i = 0; i < numdive; i++ )
     {
-        DEBUG( abstract->context, "###############Dive %d\n%s\n", i, divelist[ i ] );
+        DEBUG( abstract->context, "###############Dive %d\n%s", i, divelist[ i ] );
     }
 
     // Locate the most recent dive.
