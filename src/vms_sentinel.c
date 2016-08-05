@@ -327,6 +327,19 @@ vms_sentinel_device_foreach (dc_device_t *abstract, dc_dive_callback_t callback,
 }
 
 dc_status_t
+vms_sentinel_download_dive( dc_device_t *abstract, unsigned char buf[], unsigned int dive_num )
+{
+    DEBUG( abstract->context, "Function called: vms_sentinel_download_dive");
+	vms_sentinel_device_t *device = (vms_sentinel_device_t *) abstract;
+
+    /* TODO: Call this vms_sentinel_device_open (dc_device_t **out, dc_context_t *context, const char *name) */
+    /* TODO: Send the D<dive_num> command */
+    /* TODO: Store the response in buf */
+    /* TODO: Close the device */
+	return DC_STATUS_SUCCESS;
+}
+
+dc_status_t
 vms_sentinel_extract_dives (dc_device_t *abstract, const unsigned char data[], unsigned int size, dc_dive_callback_t callback, void *userdata)
 {
     DEBUG( abstract->context, "Function called: vms_sentinel_extract_dives");
@@ -382,9 +395,13 @@ vms_sentinel_extract_dives (dc_device_t *abstract, const unsigned char data[], u
     }
     while( diveend != NULL );
 
+    /* Create an array of dive data */
+    unsigned char **divedata[ numdive ] = {0};
     for( int i = 0; i < numdive; i++ )
     {
         DEBUG( abstract->context, "###############Dive %d\n%s", i, divelist[ i ] );
+        
+        vms_sentinel_download_dive( abstract, divedata[ i ], i )
     }
 
     // Locate the most recent dive.
