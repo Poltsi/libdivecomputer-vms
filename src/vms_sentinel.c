@@ -207,7 +207,7 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 		return EXITCODE (n);
 	}
 
-    /* TODO: call header */
+    /* Call header */
     dc_status_t rc = vms_sentinel_receive_header( abstract );
 
     if( rc != DC_STATUS_SUCCESS )
@@ -231,7 +231,7 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 		if (available > len)
 		{
 			len = available;
-			DEBUG( abstract->context, "Len modified according to available to: '%d'", len );
+			DEBUG( abstract->context, "Len modified from default to available: '%d'", len );
 		}
 
 		// Limit the packet size to the total size.
@@ -306,15 +306,27 @@ vms_sentinel_receive_header( dc_device_t *abstract )
     DEBUG( abstract->context, "Function called: vms_sentinel_receive_header");
 	vms_sentinel_device_t *device = (vms_sentinel_device_t *) abstract;
 
-	// Receive the header packet.
 	unsigned char header[3] = {0,0,0};
     int n = serial_read (device->port, header, sizeof (header));
+    int i = 0;
+	// Wait to receive the header packet for 20 cycles
+    while( ( n == 0 ) &&
+           (i < 20 ) )
+        {
+            DEBUG( abstract->context, "Header n is: %d '%s' header size should be '%d'", n, header, sizeof( header ) );
+            n = serial_read (device->port, header, sizeof (header));
+            i++;
+        }
 
 	if (n != sizeof (header)) {
 		DEBUG( abstract->context, "Header n is: %d '%s' header size should be '%d'", n, header, sizeof( header ) );
 		ERROR (abstract->context, "Failed to receive the answer.");
 		return EXITCODE (n);
 	}
+    else
+    {
+        DEBUG( abstract->context, "Received the correct number of bytes: %d", n );
+    }
 
 	// Verify the header packet. This should be "d\r\n"
 	const unsigned char expected[3] = {0x64, 0x0D, 0x0A};
@@ -323,25 +335,62 @@ vms_sentinel_receive_header( dc_device_t *abstract )
 				header, header, header, header );
 		return DC_STATUS_PROTOCOL;
 	}
+    else
+    {
+        DEBUG( abstract->context, "Matched header bytes" );
+    }
 
 	return DC_STATUS_SUCCESS;
 }
 
+/* Keep in mind that this function takes the dive number, not the index (which starts from 0) as the last argument */
 dc_status_t
 vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned int dive_num )
 {
-    DEBUG( abstract->context, "Function called: vms_sentinel_download_dive");
+    DEBUG( abstract->context, "Function called: vms_sentinel_download_dive with dive#: %d", dive_num );
 	vms_sentinel_device_t *device = (vms_sentinel_device_t *) abstract;
+    int tmpint = dive_num;
+    int numcount  = 0;
+    char intlist[ 10 ] = {0};
+
+    DEBUG( abstract->context, "Looking at tmpint: %d", tmpint );
+
+    while( tmpint != 0 )
+    {
+        DEBUG( abstract->context, "Looking in loop at tmpint: %d", tmpint );
+        intlist[ numcount ] = ( tmpint % 10 ) + 48;
+        tmpint /= 10;
+        numcount++;
+    }
+
+    DEBUG( abstract->context, "Number count is: %d", numcount );
+    DEBUG( abstract->context, "intlist is: '%s' (hex: %02x)", intlist, intlist[ 0 ] );
 
     /* TODO: Send the D<dive_num> command */
-	const unsigned char command[ 2 ] = {0x44, dive_num};
+	char command[ ( 1 + numcount ) ];
+    command[ 0 ] = 0x44;
+    int i = 1;
+    /* We need to invert the numbers as they are in the wrong order in intlist */
+    while( numcount > 0 )
+    {
+        DEBUG( abstract->context, "Setting command[ %d ] to: %02x", numcount, intlist[ ( numcount - 1 ) ] );
+        command[ i ] = intlist[ ( numcount - 1 ) ];
+        numcount--;
+        i++;
+    }
+
+    DEBUG( abstract->context, "Sending command: '%s'", command );
+
 	int n = serial_write (device->port, command, sizeof (command));
 	if (n != sizeof (command)) {
 		ERROR (abstract->context, "Failed to send the command: %s", command);
 		return EXITCODE (n);
 	}
 
+    free( command );
+
     /* Get the response bits first */
+    DEBUG( abstract->context, "Reading header" );
     dc_status_t rc = vms_sentinel_receive_header( abstract );
 
     if( rc != DC_STATUS_SUCCESS )
@@ -349,6 +398,7 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
         return( rc );
     }
     /* TODO: Store the actual dive data in buf */
+    DEBUG( abstract->context, "Next: Reading data" );
 	return DC_STATUS_SUCCESS;
 }
 
@@ -414,7 +464,8 @@ vms_sentinel_extract_dives (dc_device_t *abstract, const unsigned char data[], u
     for( int i = 0; i < numdive; i++ )
     {
         DEBUG( abstract->context, "###############Dive %d\n%s", i, divelist[ i ] );
-        vms_sentinel_download_dive( abstract, divedata[ i ], i );
+        vms_sentinel_download_dive( abstract, divedata[ i ], ( i + 1 ) );
+        // vms_sentinel_download_dive( abstract, divedata[ i ], ( 1020 ) );
     }
 
     // Locate the most recent dive.
