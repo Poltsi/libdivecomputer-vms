@@ -61,6 +61,9 @@ static dc_status_t vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t 
 static dc_status_t vms_sentinel_device_foreach (dc_device_t *abstract, dc_dive_callback_t callback, void *userdata);
 static dc_status_t vms_sentinel_device_close (dc_device_t *abstract);
 
+static dc_status_t vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned int dive_num );
+static dc_status_t vms_sentinel_receive_header( dc_device_t *abstract );
+
 static const dc_device_vtable_t vms_sentinel_device_vtable = {
 	DC_FAMILY_VMS_SENTINEL,
 	vms_sentinel_device_set_fingerprint, /* set_fingerprint */
@@ -204,22 +207,13 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 		return EXITCODE (n);
 	}
 
-	// Receive the header packet.
-	unsigned char header[3] = {0,0,0};
-	n = serial_read (device->port, header, sizeof (header));
-	if (n != sizeof (header)) {
-		DEBUG( abstract->context, "Header n is: %d '%s' header size should be '%d'", n, header, sizeof( header ) );
-		ERROR (abstract->context, "Failed to receive the answer.");
-		return EXITCODE (n);
-	}
+    /* TODO: call header */
+    dc_status_t rc = vms_sentinel_receive_header( abstract );
 
-	// Verify the header packet. This should be "d\r\n"
-	const unsigned char expected[3] = {0x64, 0x0D, 0x0A};
-	if (memcmp (header, expected, sizeof (expected)) != 0) {
-		DEBUG( abstract->context, "Unexpected header byte: '%c' integer is: '%d' string is '%s' hex is 0x%02x",
-				header, header, header, header );
-		//return DC_STATUS_PROTOCOL;
-	}
+    if( rc != DC_STATUS_SUCCESS )
+    {
+        return( rc );
+    }
 
 	unsigned char *data = dc_buffer_get_data (buffer);
 
@@ -273,26 +267,6 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 	}
 
     DEBUG( abstract->context, "Data is:\n%s", data );
-    /* Do we need this?
-	// Receive the trailer packet.
-	unsigned char trailer[4] = {0};
-	n = serial_read (device->port, trailer, sizeof (trailer));
-	if (n != sizeof (trailer)) {
-		ERROR (abstract->context, "Failed to receive the answer.");
-		return EXITCODE (n);
-	}
-	// Convert to a binary checksum.
-	unsigned char checksum[2] = {0};
-	array_convert_hex2bin (trailer, sizeof (trailer), checksum, sizeof (checksum));
-
-	// Verify the checksum.
-	unsigned int csum1 = array_uint16_be (checksum);
-	unsigned int csum2 = checksum_crc_ccitt_uint16 (data, SZ_MEMORY);
-	if (csum1 != csum2) {
-		ERROR (abstract->context, "Unexpected answer bytes.");
-		return DC_STATUS_PROTOCOL;
-	}
-    */
 
 	return DC_STATUS_SUCCESS;
 }
@@ -327,15 +301,54 @@ vms_sentinel_device_foreach (dc_device_t *abstract, dc_dive_callback_t callback,
 }
 
 dc_status_t
-vms_sentinel_download_dive( dc_device_t *abstract, unsigned char buf[], unsigned int dive_num )
+vms_sentinel_receive_header( dc_device_t *abstract )
+{
+    DEBUG( abstract->context, "Function called: vms_sentinel_receive_header");
+	vms_sentinel_device_t *device = (vms_sentinel_device_t *) abstract;
+
+	// Receive the header packet.
+	unsigned char header[3] = {0,0,0};
+    int n = serial_read (device->port, header, sizeof (header));
+
+	if (n != sizeof (header)) {
+		DEBUG( abstract->context, "Header n is: %d '%s' header size should be '%d'", n, header, sizeof( header ) );
+		ERROR (abstract->context, "Failed to receive the answer.");
+		return EXITCODE (n);
+	}
+
+	// Verify the header packet. This should be "d\r\n"
+	const unsigned char expected[3] = {0x64, 0x0D, 0x0A};
+	if (memcmp (header, expected, sizeof (expected)) != 0) {
+		DEBUG( abstract->context, "Unexpected header byte: '%c' integer is: '%d' string is '%s' hex is 0x%02x",
+				header, header, header, header );
+		return DC_STATUS_PROTOCOL;
+	}
+
+	return DC_STATUS_SUCCESS;
+}
+
+dc_status_t
+vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned int dive_num )
 {
     DEBUG( abstract->context, "Function called: vms_sentinel_download_dive");
 	vms_sentinel_device_t *device = (vms_sentinel_device_t *) abstract;
 
-    /* TODO: Call this vms_sentinel_device_open (dc_device_t **out, dc_context_t *context, const char *name) */
     /* TODO: Send the D<dive_num> command */
-    /* TODO: Store the response in buf */
-    /* TODO: Close the device */
+	const unsigned char command[ 2 ] = {0x44, dive_num};
+	int n = serial_write (device->port, command, sizeof (command));
+	if (n != sizeof (command)) {
+		ERROR (abstract->context, "Failed to send the command: %s", command);
+		return EXITCODE (n);
+	}
+
+    /* Get the response bits first */
+    dc_status_t rc = vms_sentinel_receive_header( abstract );
+
+    if( rc != DC_STATUS_SUCCESS )
+    {
+        return( rc );
+    }
+    /* TODO: Store the actual dive data in buf */
 	return DC_STATUS_SUCCESS;
 }
 
@@ -396,12 +409,12 @@ vms_sentinel_extract_dives (dc_device_t *abstract, const unsigned char data[], u
     while( diveend != NULL );
 
     /* Create an array of dive data */
-    unsigned char **divedata[ numdive ] = {0};
+    unsigned char *divedata[ numdive ];
+
     for( int i = 0; i < numdive; i++ )
     {
         DEBUG( abstract->context, "###############Dive %d\n%s", i, divelist[ i ] );
-        
-        vms_sentinel_download_dive( abstract, divedata[ i ], i )
+        vms_sentinel_download_dive( abstract, divedata[ i ], i );
     }
 
     // Locate the most recent dive.
