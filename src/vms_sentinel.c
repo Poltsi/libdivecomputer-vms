@@ -39,7 +39,7 @@
 	rc == -1 ? DC_STATUS_IO : DC_STATUS_TIMEOUT \
 )
 
-#define SZ_MEMORY 128000
+#define SZ_MEMORY 384000
 
 #define RB_LOGBOOK_BEGIN 0x0100
 #define RB_LOGBOOK_END   0x1438
@@ -312,11 +312,11 @@ vms_sentinel_receive_header( dc_device_t *abstract )
 	// Wait to receive the header packet for 20 cycles
     while( ( n == 0 ) &&
            (i < 20 ) )
-        {
-            DEBUG( abstract->context, "Header n is: %d '%s' header size should be '%d'", n, header, sizeof( header ) );
-            n = serial_read (device->port, header, sizeof (header));
-            i++;
-        }
+    {
+        DEBUG( abstract->context, "Header n is: %d '%s' header size should be '%d'", n, header, sizeof( header ) );
+        n = serial_read (device->port, header, sizeof (header));
+        i++;
+    }
 
 	if (n != sizeof (header)) {
 		DEBUG( abstract->context, "Header n is: %d '%s' header size should be '%d'", n, header, sizeof( header ) );
@@ -325,7 +325,14 @@ vms_sentinel_receive_header( dc_device_t *abstract )
 	}
     else
     {
-        DEBUG( abstract->context, "Received the correct number of bytes: %d", n );
+        DEBUG( abstract->context, "Received the correct number of bytes: %d header: %s", n, header );
+    }
+
+    // In case we get the wait byte P, we should loop here
+	const unsigned char waitbyte[3] = {0x50, 0x0D, 0x0A};
+    while( memcmp( header, waitbyte, sizeof( waitbyte ) ) == 0 )
+    {
+        DEBUG( abstract->context, "Got a waitbyte, looping..." );
     }
 
 	// Verify the header packet. This should be "d\r\n"
@@ -368,7 +375,7 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
 
     /* TODO: Send the D<dive_num> command */
 	char command[ ( 1 + numcount ) ];
-    command[ 0 ] = 0x44;
+    command[ 0 ] = 0x44; /* The D */
     int i = 1;
     /* We need to invert the numbers as they are in the wrong order in intlist */
     while( numcount > 0 )
@@ -387,18 +394,91 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
 		return EXITCODE (n);
 	}
 
-    free( command );
-
     /* Get the response bits first */
     DEBUG( abstract->context, "Reading header" );
     dc_status_t rc = vms_sentinel_receive_header( abstract );
 
     if( rc != DC_STATUS_SUCCESS )
     {
+        ERROR( abstract->context, "Failed to read header data, will not read data" );
         return( rc );
     }
     /* TODO: Store the actual dive data in buf */
     DEBUG( abstract->context, "Next: Reading data" );
+
+    /*************************************************/
+	const unsigned char dend[ 3 ] = {0x40,0x40,0x50};
+    unsigned int nbytes = 0;
+	dc_buffer_t *buffer = dc_buffer_new (SZ_MEMORY);
+
+	// Erase the current contents of the buffer and
+	// pre-allocate the required amount of memory.
+	if( ! dc_buffer_clear (buffer) ||
+        ! dc_buffer_resize( buffer, SZ_MEMORY ) )
+    {
+		ERROR( abstract->context, "Insufficient buffer space available." );
+		return DC_STATUS_NOMEMORY;
+	}
+
+	unsigned char *data = dc_buffer_get_data( buffer );
+	dc_event_progress_t progress = EVENT_PROGRESS_INITIALIZER;
+	progress.maximum = SZ_MEMORY;
+
+	while( nbytes < SZ_MEMORY )
+    {
+		// Set the minimum packet size.
+		unsigned int len = 1;
+
+		// Increase the packet size if more data is immediately available.
+		int available = serial_get_received (device->port);
+
+        DEBUG( abstract->context, "Available packet size: '%d'", available );
+
+		if( available > len )
+		{
+			DEBUG( abstract->context, "Data Len modified from default '%d' to available: '%d'", len, available );
+			len = available;
+		}
+
+		// Limit the packet size to the total size.
+		if( nbytes + len > SZ_MEMORY )
+		{
+			len = SZ_MEMORY - nbytes;
+			DEBUG( abstract->context, "Data Len modified according SZ_MEMORY to: '%d'", len );
+		}
+
+        DEBUG( abstract->context, "Have read '%d' bytes, will add '%d' bytes", nbytes, available );
+		// Read the packet.
+		n = serial_read( device->port, data + nbytes, len );
+
+		DEBUG( abstract->context, "Data read length: %d", n );
+
+        if( ! n )
+        {
+			ERROR( abstract->context, "No more data bytes to read, breaking" );
+            break;
+        }
+		// Let's see if the end of the data now is equal to the line, dive list limiter or list end
+        if (strncmp(data+strlen( data ) - 3, dend, 3 ) == 0)
+		{
+            DEBUG( abstract->context, "Dive list end detected" );
+            // We chop off the end character from the data
+            data[ strlen( data ) - 1 ] = 0;
+            break;
+        }
+
+		// Update and emit a progress event.
+		progress.current += len;
+		device_event_emit( abstract, DC_EVENT_PROGRESS, &progress );
+
+		nbytes += len;
+	}
+
+    DEBUG( abstract->context, "Dive data length: %d", strlen( data ) );
+    printf( "Dive data:\n%s\n", data );
+    //DEBUG( abstract->context, "Dive info:\n%s\n", data );
+
+    /************************************************/
 	return DC_STATUS_SUCCESS;
 }
 
@@ -463,9 +543,8 @@ vms_sentinel_extract_dives (dc_device_t *abstract, const unsigned char data[], u
 
     for( int i = 0; i < numdive; i++ )
     {
-        DEBUG( abstract->context, "###############Dive %d\n%s", i, divelist[ i ] );
+        DEBUG( abstract->context, "############### Dive %d ###############\n%s", ( i + 1 ), divelist[ i ] );
         vms_sentinel_download_dive( abstract, divedata[ i ], ( i + 1 ) );
-        // vms_sentinel_download_dive( abstract, divedata[ i ], ( 1020 ) );
     }
 
     // Locate the most recent dive.
