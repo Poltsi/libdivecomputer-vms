@@ -307,14 +307,14 @@ vms_sentinel_receive_header( dc_device_t *abstract )
 	vms_sentinel_device_t *device = (vms_sentinel_device_t *) abstract;
 
 	unsigned char header[3] = {0,0,0};
-    int n = serial_read (device->port, header, sizeof (header));
+    int n = serial_read( device->port, header, sizeof( header ) );
     int i = 0;
 	// Wait to receive the header packet for 20 cycles
     while( ( n == 0 ) &&
            (i < 20 ) )
     {
         DEBUG( abstract->context, "Header n is: %d '%s' header size should be '%d'", n, header, sizeof( header ) );
-        n = serial_read (device->port, header, sizeof (header));
+        n = serial_read( device->port, header, sizeof( header ) );
         i++;
     }
 
@@ -328,15 +328,18 @@ vms_sentinel_receive_header( dc_device_t *abstract )
         DEBUG( abstract->context, "Received the correct number of bytes: %d header: %s", n, header );
     }
 
+	const unsigned char expected[3] = {0x64, 0x0D, 0x0A};
+
     // In case we get the wait byte P, we should loop here
-	const unsigned char waitbyte[3] = {0x50, 0x0D, 0x0A};
-    while( memcmp( header, waitbyte, sizeof( waitbyte ) ) == 0 )
+	//const unsigned char waitbyte[2] = {0x50, 0x0D};
+    while( ( n > 0 ) &&
+           ( memcmp( header, expected, sizeof( expected ) ) != 0 ) )
     {
-        DEBUG( abstract->context, "Got a waitbyte, looping..." );
+        DEBUG( abstract->context, "Waited for '%s', got something else('%s'), refetching...", expected, header );
+        n = serial_read( device->port, header, sizeof( header ) );
     }
 
 	// Verify the header packet. This should be "d\r\n"
-	const unsigned char expected[3] = {0x64, 0x0D, 0x0A};
 	if (memcmp (header, expected, sizeof (expected)) != 0) {
 		DEBUG( abstract->context, "Unexpected header byte: '%c' integer is: '%d' string is '%s' hex is 0x%02x",
 				header, header, header, header );
@@ -394,20 +397,12 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
 		return EXITCODE (n);
 	}
 
-    /* Get the response bits first */
-    DEBUG( abstract->context, "Reading header" );
-    dc_status_t rc = vms_sentinel_receive_header( abstract );
-
-    if( rc != DC_STATUS_SUCCESS )
-    {
-        ERROR( abstract->context, "Failed to read header data, will not read data" );
-        return( rc );
-    }
     /* TODO: Store the actual dive data in buf */
     DEBUG( abstract->context, "Next: Reading data" );
 
     /*************************************************/
-	const unsigned char dend[ 3 ] = {0x40,0x40,0x50};
+	/* The end string is @@P */
+    const unsigned char dend[ 3 ] = {0x40,0x40,0x50};
     unsigned int nbytes = 0;
 	dc_buffer_t *buffer = dc_buffer_new (SZ_MEMORY);
 
@@ -432,8 +427,6 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
 		// Increase the packet size if more data is immediately available.
 		int available = serial_get_received (device->port);
 
-        DEBUG( abstract->context, "Available packet size: '%d'", available );
-
 		if( available > len )
 		{
 			DEBUG( abstract->context, "Data Len modified from default '%d' to available: '%d'", len, available );
@@ -447,11 +440,8 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
 			DEBUG( abstract->context, "Data Len modified according SZ_MEMORY to: '%d'", len );
 		}
 
-        DEBUG( abstract->context, "Have read '%d' bytes, will add '%d' bytes", nbytes, available );
 		// Read the packet.
 		n = serial_read( device->port, data + nbytes, len );
-
-		DEBUG( abstract->context, "Data read length: %d", n );
 
         if( ! n )
         {
@@ -475,8 +465,7 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
 	}
 
     DEBUG( abstract->context, "Dive data length: %d", strlen( data ) );
-    printf( "Dive data:\n%s\n", data );
-    //DEBUG( abstract->context, "Dive info:\n%s\n", data );
+    printf( "Dive data for dive %d:\n%s\n", dive_num, data );
 
     /************************************************/
 	return DC_STATUS_SUCCESS;
