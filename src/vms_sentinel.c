@@ -22,6 +22,8 @@
 #include <string.h> // memcpy, memcmp
 #include <stdlib.h> // malloc, free
 #include <assert.h> // assert
+/* Remove this when we no longer write the raw dive dump to file */
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <libdivecomputer/vms_sentinel.h>
 
@@ -32,6 +34,7 @@
 #include "array.h"
 #include "ringbuffer.h"
 
+
 #define ISINSTANCE(device) dc_device_isinstance((device), &vms_sentinel_device_vtable)
 
 #define EXITCODE(rc) \
@@ -40,7 +43,7 @@
 )
 
 #define SZ_MEMORY 384000
-
+#define MIN_IDLE_BYTES 3
 #define RB_LOGBOOK_BEGIN 0x0100
 #define RB_LOGBOOK_END   0x1438
 #define RB_LOGBOOK_SIZE  0x52
@@ -62,7 +65,9 @@ static dc_status_t vms_sentinel_device_foreach (dc_device_t *abstract, dc_dive_c
 static dc_status_t vms_sentinel_device_close (dc_device_t *abstract);
 
 static dc_status_t vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned int dive_num );
+
 static dc_status_t vms_sentinel_receive_header( dc_device_t *abstract );
+static dc_status_t vms_sentinel_wait_for_idle_byte( dc_device_t *abstract );
 
 static const dc_device_vtable_t vms_sentinel_device_vtable = {
 	DC_FAMILY_VMS_SENTINEL,
@@ -137,7 +142,7 @@ vms_sentinel_device_open (dc_device_t **out, dc_context_t *context, const char *
         DEBUG( context, "Probably mockup device: '%s'", name );
     }
 
-	serial_sleep (device->port, 100);
+	serial_sleep (device->port, 300);
 	serial_flush (device->port, SERIAL_QUEUE_BOTH);
 
 	*out = (dc_device_t *) device;
@@ -251,9 +256,9 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
             break;
         }
 		// Let's see if the end of the data now is equal to the line, dive list limiter or list end
-        if (strncmp(data+strlen(data) - 1, dend, 1) == 0)
+        if( strncmp( data + strlen( data ) - 1, dend, 1 ) == 0 )
 		{
-            DEBUG( abstract->context, "Dive list end detected" );
+            DEBUG( abstract->context, "Dive list end detected (%s)", dend );
             // We chop off the end character from the data
             data[ strlen( data ) - 1 ] = 0;
             break;
@@ -301,6 +306,102 @@ vms_sentinel_device_foreach (dc_device_t *abstract, dc_dive_callback_t callback,
 }
 
 dc_status_t
+vms_sentinel_wait_for_idle_byte( dc_device_t *abstract )
+{
+    DEBUG( abstract->context, "Function called: vms_sentinel_wait_for_idle_byte");
+	vms_sentinel_device_t *device = (vms_sentinel_device_t *) abstract;
+
+    /* Let's collect the crap we read from the device here which is not the idle byte */
+	dc_buffer_t *buffer = dc_buffer_new( SZ_MEMORY );
+
+	// Erase the current contents of the buffer and
+	// pre-allocate the required amount of memory.
+	if( ! dc_buffer_clear (buffer) ||
+        ! dc_buffer_resize( buffer, SZ_MEMORY ) )
+    {
+ 		ERROR( abstract->context, "Insufficient buffer space available." );
+		return DC_STATUS_NOMEMORY;
+	}
+
+	unsigned char *data = dc_buffer_get_data( buffer );
+    /* This is our temporal pointer in data to which we print the crap */
+    unsigned char * dp = data;
+
+    unsigned char read_byte[1] = {0};
+    /* How many times to we expect the idle byte to appear. There should not be any strings */
+    /* that have PP, but let's be on the sure side */
+    int hits = 0;
+    int n = serial_read( device->port, read_byte, sizeof( read_byte ) );
+    int i = 0;
+	// Wait to receive the read_byte packet for 20 cycles
+    while( ( n == 0 ) &&
+           (i < 20 ) )
+    {
+        DEBUG( abstract->context, "Read_Byte n is: %d '%s' read_byte size should be '%d'", n, read_byte, sizeof( read_byte ) );
+        n = serial_read( device->port, read_byte, sizeof( read_byte ) );
+        i++;
+    }
+
+    while( hits < MIN_IDLE_BYTES )
+    {
+        if( n != sizeof( read_byte ) )
+        {
+            DEBUG( abstract->context, "Read_Byte n is: %d '%s' read_byte size should be '%d'", n, read_byte, sizeof( read_byte ) );
+            ERROR (abstract->context, "Failed to receive the answer.");
+            return EXITCODE (n);
+        }
+        else
+        {
+            DEBUG( abstract->context, "Received the correct number of bytes: %d read_byte: %s", n, read_byte );
+        }
+
+        const unsigned char expected[1] = {0x50};
+
+        while( ( n > 0 ) &&
+               ( memcmp( read_byte, expected, sizeof( expected ) ) != 0 ) )
+        {
+            DEBUG( abstract->context, "Waited for '%s', got something else('%s'), keep on refetching...", expected, read_byte );
+            n = serial_read( device->port, read_byte, sizeof( read_byte ) );
+
+            /* Add the crap byte to our data */
+            strncpy( dp, read_byte, sizeof( read_byte ) );
+            dp = dp + sizeof( read_byte );
+
+            /* Make sure we don't write past our buffer */
+            if( dp >= data + SZ_MEMORY )
+            {
+                ERROR( abstract->context, "Read more crap than the buffer can take." );
+                DEBUG( abstract->context, "Dumping the collected crap:\n%s\n", data );
+                return DC_STATUS_NOMEMORY;
+            }
+        }
+
+        if( n == 0 )
+        {
+            DEBUG( abstract->context, "We ran out of bytes to read" );
+            return DC_STATUS_PROTOCOL;
+        }
+
+        // Verify the read_byte packet. This should be "d\r\n"
+        if (memcmp (read_byte, expected, sizeof (expected)) != 0)
+        {
+            DEBUG( abstract->context, "Unexpected read_byte byte: '%c' integer is: '%d' string is '%s' hex is 0x%02x",
+                   read_byte, read_byte, read_byte, read_byte );
+            return DC_STATUS_PROTOCOL;
+        }
+        else
+        {
+            DEBUG( abstract->context, "Matched read_byte bytes" );
+            hits++;
+        }
+    }
+
+    DEBUG( abstract->context, "Dumping the collected crap:\n%s\n", data );
+
+	return DC_STATUS_SUCCESS;
+}
+
+dc_status_t
 vms_sentinel_receive_header( dc_device_t *abstract )
 {
     DEBUG( abstract->context, "Function called: vms_sentinel_receive_header");
@@ -330,8 +431,6 @@ vms_sentinel_receive_header( dc_device_t *abstract )
 
 	const unsigned char expected[3] = {0x64, 0x0D, 0x0A};
 
-    // In case we get the wait byte P, we should loop here
-	//const unsigned char waitbyte[2] = {0x50, 0x0D};
     while( ( n > 0 ) &&
            ( memcmp( header, expected, sizeof( expected ) ) != 0 ) )
     {
@@ -365,12 +464,21 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
 
     DEBUG( abstract->context, "Looking at tmpint: %d", tmpint );
 
-    while( tmpint != 0 )
+    if( tmpint == 0 )
     {
-        DEBUG( abstract->context, "Looking in loop at tmpint: %d", tmpint );
-        intlist[ numcount ] = ( tmpint % 10 ) + 48;
-        tmpint /= 10;
-        numcount++;
+        /* Initialize the list with a zero */
+        intlist[ 0 ] = 48;
+        numcount     = 1;
+    }
+    else
+    {
+        while( tmpint != 0 )
+        {
+            DEBUG( abstract->context, "Looking in loop at tmpint: %d", tmpint );
+            intlist[ numcount ] = ( tmpint % 10 ) + 48;
+            tmpint /= 10;
+            numcount++;
+        }
     }
 
     DEBUG( abstract->context, "Number count is: %d", numcount );
@@ -404,7 +512,7 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
 	/* The end string is @@P */
     const unsigned char dend[ 3 ] = {0x40,0x40,0x50};
     unsigned int nbytes = 0;
-	dc_buffer_t *buffer = dc_buffer_new (SZ_MEMORY);
+	dc_buffer_t *buffer = dc_buffer_new( SZ_MEMORY );
 
 	// Erase the current contents of the buffer and
 	// pre-allocate the required amount of memory.
@@ -451,7 +559,7 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
 		// Let's see if the end of the data now is equal to the line, dive list limiter or list end
         if (strncmp(data+strlen( data ) - 3, dend, 3 ) == 0)
 		{
-            DEBUG( abstract->context, "Dive list end detected" );
+            DEBUG( abstract->context, "Dive list end detected (%s)", dend );
             // We chop off the end character from the data
             data[ strlen( data ) - 1 ] = 0;
             break;
@@ -465,7 +573,20 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
 	}
 
     DEBUG( abstract->context, "Dive data length: %d", strlen( data ) );
-    printf( "Dive data for dive %d:\n%s\n", dive_num, data );
+
+    // Write the data into a file
+    char* out_file;
+    asprintf( &out_file, "sentinel-%02d.txt", dive_num );
+    DEBUG( abstract->context, "Printing raw dive data to: %s", out_file );
+    FILE *fp = fopen( out_file, "w+" );
+
+    if( fp != NULL )
+    {
+        fputs( data, fp );
+        fclose( fp );
+    }
+
+    free( out_file );
 
     /************************************************/
 	return DC_STATUS_SUCCESS;
@@ -501,10 +622,9 @@ vms_sentinel_extract_dives (dc_device_t *abstract, const unsigned char data[], u
     do
     {
 		DEBUG( abstract->context, "Checking dive: %d", numdive );
-        numdive++;
         diveend = strstr( divestart, "d\r\n" );
         DEBUG( abstract->context, "Reallocing divelist" );
-        divelist = realloc( divelist, numdive * sizeof( *divelist ) );
+        divelist = realloc( divelist, ( numdive + 1 ) * sizeof( *divelist ) );
 
         int strsize = diveend - divestart;
 
@@ -517,13 +637,14 @@ vms_sentinel_extract_dives (dc_device_t *abstract, const unsigned char data[], u
         strsize++;
 		DEBUG( abstract->context, "New string length: %d", strsize );
         DEBUG( abstract->context, "Mallocing divelist entry" );
-        divelist[ ( numdive - 1 ) ] = malloc( strsize * sizeof( char ) );
+        divelist[ numdive ] = malloc( strsize * sizeof( char ) );
         DEBUG( abstract->context, "Resetting divelist entry" );
-        memset( divelist[ ( numdive - 1 ) ], 0, strsize );
+        memset( divelist[ numdive ], 0, strsize );
         DEBUG( abstract->context, "Copying divelist entry" );
-        strncpy( divelist[ ( numdive - 1 ) ], divestart, ( strsize - 1 ) );
+        strncpy( divelist[ numdive ], divestart, ( strsize - 1 ) );
         divestart = divestart + strsize + 2; /* Move the start pointer to the beginning of next */
 		DEBUG( abstract->context, "Start: %d End: %d Length: %d", divestart, diveend, strsize );
+        numdive++;
     }
     while( diveend != NULL );
 
@@ -532,8 +653,10 @@ vms_sentinel_extract_dives (dc_device_t *abstract, const unsigned char data[], u
 
     for( int i = 0; i < numdive; i++ )
     {
-        DEBUG( abstract->context, "############### Dive %d ###############\n%s", ( i + 1 ), divelist[ i ] );
-        vms_sentinel_download_dive( abstract, divedata[ i ], ( i + 1 ) );
+        DEBUG( abstract->context, "############### Dive %d ###############\n%s", i, divelist[ i ] );
+        vms_sentinel_download_dive( abstract, divedata[ i ], i );
+        /* Let's loop here until we get the idle-byte (P) */
+        vms_sentinel_wait_for_idle_byte( abstract );
     }
 
     // Locate the most recent dive.
