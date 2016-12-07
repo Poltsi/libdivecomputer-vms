@@ -22,8 +22,6 @@
 #include <string.h> // memcpy, memcmp
 #include <stdlib.h> // malloc, free
 #include <assert.h> // assert
-/* Remove this when we no longer write the raw dive dump to file */
-#define _GNU_SOURCE
 #include <stdio.h>
 #include <libdivecomputer/vms_sentinel.h>
 
@@ -327,76 +325,33 @@ vms_sentinel_wait_for_idle_byte( dc_device_t *abstract )
     /* This is our temporal pointer in data to which we print the crap */
     unsigned char * dp = data;
 
-    unsigned char read_byte[1] = {0};
-    /* How many times to we expect the idle byte to appear. There should not be any strings */
-    /* that have PP, but let's be on the sure side */
-    int hits = 0;
+    unsigned char read_byte[ 3 ]  = {0,0,0};
+    unsigned char store_byte[ 3 ] = {0,0,0};
+    /* We expect to get at least 3 consecutive bytes, PPP */
+    unsigned char expected[ 3 ]   = {0x50,0x50,0x50};
     int n = serial_read( device->port, read_byte, sizeof( read_byte ) );
-    int i = 0;
-	// Wait to receive the read_byte packet for 20 cycles
-    while( ( n == 0 ) &&
-           (i < 20 ) )
+    int p = 0;
+    int m = memcmp( store_byte, expected, sizeof( expected ) );
+    DEBUG( abstract->context, "Match is %d for %d vs %d bytes", m, sizeof( store_byte ), sizeof( expected ) );
+
+    while( m != 0 )
     {
-        DEBUG( abstract->context, "Read_Byte n is: %d '%s' read_byte size should be '%d'", n, read_byte, sizeof( read_byte ) );
         n = serial_read( device->port, read_byte, sizeof( read_byte ) );
-        i++;
-    }
 
-    while( hits < MIN_IDLE_BYTES )
-    {
-        if( n != sizeof( read_byte ) )
+        if( n > 0 )
         {
-            DEBUG( abstract->context, "Read_Byte n is: %d '%s' read_byte size should be '%d'", n, read_byte, sizeof( read_byte ) );
-            ERROR (abstract->context, "Failed to receive the answer.");
-            return EXITCODE (n);
-        }
-        else
-        {
-            DEBUG( abstract->context, "Received the correct number of bytes: %d read_byte: %s", n, read_byte );
-        }
-
-        const unsigned char expected[1] = {0x50};
-
-        while( ( n > 0 ) &&
-               ( memcmp( read_byte, expected, sizeof( expected ) ) != 0 ) )
-        {
-            DEBUG( abstract->context, "Waited for '%s', got something else('%s'), keep on refetching...", expected, read_byte );
-            n = serial_read( device->port, read_byte, sizeof( read_byte ) );
-
-            /* Add the crap byte to our data */
-            strncpy( dp, read_byte, sizeof( read_byte ) );
-            dp = dp + sizeof( read_byte );
-
-            /* Make sure we don't write past our buffer */
-            if( dp >= data + SZ_MEMORY )
+            for( int i = 0; i < n; i++ )
             {
-                ERROR( abstract->context, "Read more crap than the buffer can take." );
-                DEBUG( abstract->context, "Dumping the collected crap:\n%s\n", data );
-                return DC_STATUS_NOMEMORY;
+                store_byte[ p ] = read_byte[ i ];
+                DEBUG( abstract->context, "Waiting for 3 wait-bytes, got %d byte, storing it in buf (%d): '%s' comparing it to '%s'", n, p, store_byte, expected );
+                p++;
+                p = p % 3;
             }
         }
 
-        if( n == 0 )
-        {
-            DEBUG( abstract->context, "We ran out of bytes to read" );
-            return DC_STATUS_PROTOCOL;
-        }
-
-        // Verify the read_byte packet. This should be "d\r\n"
-        if (memcmp (read_byte, expected, sizeof (expected)) != 0)
-        {
-            DEBUG( abstract->context, "Unexpected read_byte byte: '%c' integer is: '%d' string is '%s' hex is 0x%02x",
-                   read_byte, read_byte, read_byte, read_byte );
-            return DC_STATUS_PROTOCOL;
-        }
-        else
-        {
-            DEBUG( abstract->context, "Matched read_byte bytes" );
-            hits++;
-        }
+        m = memcmp( store_byte, expected, sizeof( expected ) );
+        DEBUG( abstract->context, "Match is %d for %d vs %d bytes", m, sizeof( store_byte ), sizeof( expected ) );
     }
-
-    DEBUG( abstract->context, "Dumping the collected crap:\n%s\n", data );
 
 	return DC_STATUS_SUCCESS;
 }
@@ -484,7 +439,9 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
     DEBUG( abstract->context, "Number count is: %d", numcount );
     DEBUG( abstract->context, "intlist is: '%s' (hex: %02x)", intlist, intlist[ 0 ] );
 
-    /* TODO: Send the D<dive_num> command */
+    /* TODO: Wait first for the wait-byte P before sending the download command */
+    vms_sentinel_wait_for_idle_byte( abstract );
+    /* Send the D<dive_num> command */
 	char command[ ( 1 + numcount ) ];
     command[ 0 ] = 0x44; /* The D */
     int i = 1;
@@ -508,9 +465,22 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
     /* TODO: Store the actual dive data in buf */
     DEBUG( abstract->context, "Next: Reading data" );
 
-    /*************************************************/
-	/* The end string is @@P */
-    const unsigned char dend[ 3 ] = {0x40,0x40,0x50};
+    /*********** Various matchers ********************/
+    /* Line termination */
+    const unsigned char lt[ 2 ]            = {0x0D,0x0A};
+    /* How many lines of profile we should have, M    e    m <sp> */
+    const unsigned char profile_num[ 4 ]   = {0x4D,0x65,0x6D,0x20};
+    /* When the dive started,                    S    t    a    r    t */
+    const unsigned char dive_start[ 5 ]    = {0x40,0x40,0x61,0x72,0x74};
+    /* When the dive ended,                      F    i    n    i    s    h */
+    const unsigned char dive_end[ 6 ]      = {0x46,0x69,0x6E,0x69,0x73,0x68};
+    /* Start of the profile section,             P    r    o    f    i    l    e */
+    const unsigned char profile_start[ 7 ] = {0x50,0x72,0x6F,0x66,0x69,0x6C,0x65};
+    /* End of the profile section,               E    n    d */
+    const unsigned char profile_end[ 3 ]   = {0x45,0x6E,0x64};
+	/* The end string is                         @    @    P */
+    const unsigned char dend[ 3 ]          = {0x40,0x40,0x50};
+    
     unsigned int nbytes = 0;
 	dc_buffer_t *buffer = dc_buffer_new( SZ_MEMORY );
 
@@ -526,6 +496,17 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
 	unsigned char *data = dc_buffer_get_data( buffer );
 	dc_event_progress_t progress = EVENT_PROGRESS_INITIALIZER;
 	progress.maximum = SZ_MEMORY;
+    /* Array where we store the lines from the header */
+    unsigned char **header_list = NULL;
+    /* Array where we store the lines from the profile */
+    unsigned char **profile_list = NULL;
+    int is_profile = 0;
+    /* Pointers to the start and end of the line, we shift these as we find new lines */
+    char *line_start = data;
+    char *line_end   = data;
+    /* Line counters for header and profile */
+    int h_count = 0;
+    int p_count = 0;
 
 	while( nbytes < SZ_MEMORY )
     {
@@ -537,7 +518,7 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
 
 		if( available > len )
 		{
-			DEBUG( abstract->context, "Data Len modified from default '%d' to available: '%d'", len, available );
+			DEBUG( abstract->context, "Data length modified from default '%d' to available: '%d'", len, available );
 			len = available;
 		}
 
@@ -545,7 +526,7 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
 		if( nbytes + len > SZ_MEMORY )
 		{
 			len = SZ_MEMORY - nbytes;
-			DEBUG( abstract->context, "Data Len modified according SZ_MEMORY to: '%d'", len );
+			DEBUG( abstract->context, "Data length modified according SZ_MEMORY to: '%d'", len );
 		}
 
 		// Read the packet.
@@ -556,13 +537,57 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
 			ERROR( abstract->context, "No more data bytes to read, breaking" );
             break;
         }
-		// Let's see if the end of the data now is equal to the line, dive list limiter or list end
-        if (strncmp(data+strlen( data ) - 3, dend, 3 ) == 0)
+
+        line_end += n;
+        // DEBUG( abstract->context, "Read %d bytes", n );
+
+		/* Let's see if the end of the data now is equal to the linebreak */
+        if( strncmp( data + strlen( data ) - strlen( lt ), lt, strlen( lt ) ) == 0 )
 		{
-            DEBUG( abstract->context, "Dive list end detected (%s)", dend );
-            // We chop off the end character from the data
-            data[ strlen( data ) - 1 ] = 0;
-            break;
+            DEBUG( abstract->context, "Linebreak detected" );
+            /* /\* Get the line, note that we remove the linebreak characters *\/ */
+            int line_length = line_end - line_start - 2;
+            /* DEBUG( abstract->context, "Allocating %d bytes for line", line_length ); */
+            char *line = malloc( line_length * sizeof( char ) );
+            memset( line, 0, line_length );
+            strncpy( line, line_start, line_length );
+            DEBUG( abstract->context, "Line is: %s", line );
+            /* /\* Depending whether we are in the header or profile, realloc a new line *\/ */
+            /* if( is_profile ) */
+            /* { */
+            /*     DEBUG( abstract->context, "Reallocing profile_list" ); */
+            /*     profile_list = realloc( profile_list, ( p_count + 1 ) * sizeof( *profile_list ) ); */
+            /*     profile_list[ p_count ] = malloc( strlen( line ) * sizeof( char ) ); */
+            /*     strncpy( profile_list[ p_count ], line, strlen( line ) ); */
+            /*     p_count++; */
+            /* } */
+            /* else */
+            /* { */
+            /*     DEBUG( abstract->context, "Reallocing header_list" ); */
+            /*     header_list = realloc( header_list, ( h_count + 1 ) * sizeof( *header_list ) ); */
+            /*     header_list[ p_count ] = malloc( strlen( line ) * sizeof( char ) ); */
+            /*     strncpy( header_list[ p_count ], line, strlen( line ) ); */
+            /*     h_count++; */
+            /* } */
+
+            /* /\* Check whether the line is the marker for the profile to start *\/ */
+            /* if( strncmp( line, profile_start, strlen( profile_start ) ) == 0 ) */
+            /* { */
+            /*     DEBUG( abstract->context, "This is the start line of the profile: %s", line ); */
+            /*     is_profile = 1; */
+            /* } */
+                
+            /* Check whether the line is the marker for the profile to end */
+            if( strncmp( line, profile_end, strlen( profile_end ) ) == 0 )
+            {
+                DEBUG( abstract->context, "This is the end line of the profile: %s", line );
+                break;
+            }
+
+            free( line );
+
+            line_start = line_end;
+            
         }
 
 		// Update and emit a progress event.
@@ -611,7 +636,7 @@ vms_sentinel_extract_dives (dc_device_t *abstract, const unsigned char data[], u
     char wbuf[ SZ_MEMORY ];
     memcpy( wbuf, data, SZ_MEMORY );
     // This is our list of strings, uninitialized
-    unsigned char **divelist = NULL;
+    unsigned char **header_list = NULL;
     // We use two pointers, one which always points to the beginning of the current dive, and
     // one which is at the end of it
     char *divestart = wbuf;
@@ -623,8 +648,8 @@ vms_sentinel_extract_dives (dc_device_t *abstract, const unsigned char data[], u
     {
 		DEBUG( abstract->context, "Checking dive: %d", numdive );
         diveend = strstr( divestart, "d\r\n" );
-        DEBUG( abstract->context, "Reallocing divelist" );
-        divelist = realloc( divelist, ( numdive + 1 ) * sizeof( *divelist ) );
+        DEBUG( abstract->context, "Reallocing header_list" );
+        header_list = realloc( header_list, ( numdive + 1 ) * sizeof( *header_list ) );
 
         int strsize = diveend - divestart;
 
@@ -636,27 +661,49 @@ vms_sentinel_extract_dives (dc_device_t *abstract, const unsigned char data[], u
 
         strsize++;
 		DEBUG( abstract->context, "New string length: %d", strsize );
-        DEBUG( abstract->context, "Mallocing divelist entry" );
-        divelist[ numdive ] = malloc( strsize * sizeof( char ) );
-        DEBUG( abstract->context, "Resetting divelist entry" );
-        memset( divelist[ numdive ], 0, strsize );
-        DEBUG( abstract->context, "Copying divelist entry" );
-        strncpy( divelist[ numdive ], divestart, ( strsize - 1 ) );
+        DEBUG( abstract->context, "Mallocing header_list entry" );
+        header_list[ numdive ] = malloc( strsize * sizeof( char ) );
+        DEBUG( abstract->context, "Resetting header_list entry" );
+        memset( header_list[ numdive ], 0, strsize );
+        DEBUG( abstract->context, "Copying header_list entry" );
+        strncpy( header_list[ numdive ], divestart, ( strsize - 1 ) );
         divestart = divestart + strsize + 2; /* Move the start pointer to the beginning of next */
-		DEBUG( abstract->context, "Start: %d End: %d Length: %d", divestart, diveend, strsize );
+		DEBUG( abstract->context, "Header length: %d", strsize );
         numdive++;
     }
     while( diveend != NULL );
 
-    /* Create an array of dive data */
-    unsigned char *divedata[ numdive ];
+    /* The order of the headers is the wrong way around, reorder it to conform to the numbering 
+     * so that the first one is the newest */
+    /* We also clean up the memory */
+    unsigned char *metadata[ numdive ];
+    int j = 0;
 
-    for( int i = 0; i < numdive; i++ )
+    DEBUG( abstract->context, "Inverting header list" );
+
+    for( int i = ( numdive - 1 ); i > -1; i-- )
     {
-        DEBUG( abstract->context, "############### Dive %d ###############\n%s", i, divelist[ i ] );
-        vms_sentinel_download_dive( abstract, divedata[ i ], i );
+        DEBUG( abstract->context, "inverting: %d becomes %d", j, i );
+        metadata[ i ] = malloc( strlen( header_list[ j ] ) * sizeof( char ) );
+        strcpy( metadata[ i ], header_list[ j ] );
+        DEBUG( abstract->context, "Header for dive #%d:\n%s", i, metadata[ i ] );
+        DEBUG( abstract->context, "Freeing header_list item #%d", j );
+        free( header_list[ j ] );
+        j++;
+    }
+
+    DEBUG( abstract->context, "Freeing header_list" );
+    free( header_list );
+    DEBUG( abstract->context, "Creating dive_data array with %d items", numdive );
+    /* Create an array of dive data */
+    unsigned char *dive_data[ numdive ];
+
+    for( int i = 0; i < 3; i++ )
+    {
+        DEBUG( abstract->context, "############### Dive %d ###############\n%s", i, metadata[ i ] );
+        vms_sentinel_download_dive( abstract, dive_data[ i ], i );
         /* Let's loop here until we get the idle-byte (P) */
-        vms_sentinel_wait_for_idle_byte( abstract );
+        // vms_sentinel_wait_for_idle_byte( abstract );
     }
 
     // Locate the most recent dive.
