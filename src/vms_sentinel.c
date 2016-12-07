@@ -202,6 +202,9 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 	progress.maximum = SZ_MEMORY;
 	device_event_emit (abstract, DC_EVENT_PROGRESS, &progress);
 
+    /* First we wait for the wait byte */
+    vms_sentinel_wait_for_idle_byte( abstract );
+
 	// Send the command byte (M) to the dive computer.
 	const unsigned char command[] = {0x4d};
 	int n = serial_write (device->port, command, sizeof (command));
@@ -326,9 +329,9 @@ vms_sentinel_wait_for_idle_byte( dc_device_t *abstract )
     unsigned char * dp = data;
 
     unsigned char read_byte[ 3 ]  = {0,0,0};
-    unsigned char store_byte[ 3 ] = {0,0,0};
+    unsigned char store_byte[ 4 ] = {0,0,0,0};
     /* We expect to get at least 3 consecutive bytes, PPP */
-    unsigned char expected[ 3 ]   = {0x50,0x50,0x50};
+    unsigned char expected[ 4 ]   = {0x50,0x50,0x50,0};
     int n = serial_read( device->port, read_byte, sizeof( read_byte ) );
     int p = 0;
     int m = memcmp( store_byte, expected, sizeof( expected ) );
@@ -480,7 +483,7 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
     const unsigned char profile_end[ 3 ]   = {0x45,0x6E,0x64};
 	/* The end string is                         @    @    P */
     const unsigned char dend[ 3 ]          = {0x40,0x40,0x50};
-    
+
     unsigned int nbytes = 0;
 	dc_buffer_t *buffer = dc_buffer_new( SZ_MEMORY );
 
@@ -576,7 +579,7 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
             /*     DEBUG( abstract->context, "This is the start line of the profile: %s", line ); */
             /*     is_profile = 1; */
             /* } */
-                
+
             /* Check whether the line is the marker for the profile to end */
             if( strncmp( line, profile_end, strlen( profile_end ) ) == 0 )
             {
@@ -587,7 +590,6 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
             free( line );
 
             line_start = line_end;
-            
         }
 
 		// Update and emit a progress event.
@@ -673,7 +675,7 @@ vms_sentinel_extract_dives (dc_device_t *abstract, const unsigned char data[], u
     }
     while( diveend != NULL );
 
-    /* The order of the headers is the wrong way around, reorder it to conform to the numbering 
+    /* The order of the headers is the wrong way around, reorder it to conform to the numbering
      * so that the first one is the newest */
     /* We also clean up the memory */
     unsigned char *metadata[ numdive ];
