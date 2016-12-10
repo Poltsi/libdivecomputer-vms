@@ -58,4 +58,4 @@ libdivecomputer_HEADERS = 	\
 	cochran.h \
 	cochran_commander.h \
 	vms.h \
-	vms-sentinel.h
+	vms_sentinel.h
