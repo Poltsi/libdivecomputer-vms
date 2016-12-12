@@ -115,10 +115,16 @@ vms_sentinel_device_open (dc_device_t **out, dc_context_t *context, const char *
 	}
 
     // Set the RTS line
-    status = dc_serial_set_rts (device->port, 1);
-    if (status != DC_STATUS_SUCCESS) {
-        ERROR (context, "Failed to set the RTS line.");
-        goto error_close;
+    if( ! ( strncmp( name, "/dev/pts/", 9 ) == 0 ) ) {
+        DEBUG( context, "Real device: '%s'", name );
+
+        status = dc_serial_set_rts (device->port, 1);
+        if (status != DC_STATUS_SUCCESS) {
+            ERROR (context, "Failed to set the RTS line.");
+            goto error_close;
+        }
+    } else {
+        DEBUG( context, "Probably mockup device: '%s'", name );
     }
 
     dc_serial_sleep (device->port, 200);
