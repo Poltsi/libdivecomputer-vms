@@ -1,0 +1,7 @@
+Start socat with the following command:
+
+socat -d -d -d pty,b9600,echo=1,raw,csize=3,ispeed=9600,ospeed=9600,user=poltsi pty,b9600,echo=1,raw,csize=3,ispeed=9600,ospeed=9600,user=poltsi
+
+Observe which pts's it connects to, and after that you can fire up the emulator in another terminal with the command:
+
+./sentinel_serial_emulator.pl /dev/pts/<pts id>
