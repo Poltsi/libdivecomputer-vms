@@ -41,45 +41,33 @@ static dc_status_t vms_sentinel_parser_set_data (dc_parser_t *abstract, const un
 static dc_status_t vms_sentinel_parser_get_datetime (dc_parser_t *abstract, dc_datetime_t *datetime);
 static dc_status_t vms_sentinel_parser_get_field (dc_parser_t *abstract, dc_field_type_t type, unsigned int flags, void *value);
 static dc_status_t vms_sentinel_parser_samples_foreach (dc_parser_t *abstract, dc_sample_callback_t callback, void *userdata);
-static dc_status_t vms_sentinel_parser_destroy (dc_parser_t *abstract);
 
 static const dc_parser_vtable_t vms_sentinel_parser_vtable = {
+    sizeof(vms_sentinel_parser_t),
 	DC_FAMILY_VMS_SENTINEL,
 	vms_sentinel_parser_set_data, /* set_data */
 	vms_sentinel_parser_get_datetime, /* datetime */
 	vms_sentinel_parser_get_field, /* fields */
 	vms_sentinel_parser_samples_foreach, /* samples_foreach */
-	vms_sentinel_parser_destroy /* destroy */
+	NULL /* destroy */
 };
 
 
 dc_status_t
 vms_sentinel_parser_create (dc_parser_t **out, dc_context_t *context)
 {
+    vms_sentinel_parser_t *parser = NULL;
 	if (out == NULL)
 		return DC_STATUS_INVALIDARGS;
 
 	// Allocate memory.
-	vms_sentinel_parser_t *parser = (vms_sentinel_parser_t *) malloc (sizeof (vms_sentinel_parser_t));
+    parser = (vms_sentinel_parser_t *) dc_parser_allocate (context, &vms_sentinel_parser_vtable);
 	if (parser == NULL) {
 		ERROR (context, "Failed to allocate memory.");
 		return DC_STATUS_NOMEMORY;
 	}
 
-	// Initialize the base class.
-	parser_init (&parser->base, context, &vms_sentinel_parser_vtable);
-
 	*out = (dc_parser_t*) parser;
-
-	return DC_STATUS_SUCCESS;
-}
-
-
-static dc_status_t
-vms_sentinel_parser_destroy (dc_parser_t *abstract)
-{
-	// Free memory.
-	free (abstract);
 
 	return DC_STATUS_SUCCESS;
 }
@@ -160,6 +148,9 @@ vms_sentinel_parser_samples_foreach (dc_parser_t *abstract, dc_sample_callback_t
 	unsigned int time = 0;
 	unsigned int interval = 20;
 
+    unsigned int gasmix_previous = 0xFFFFFFFF;
+    unsigned int gasmix = 0;
+
 	unsigned int offset = SZ_HEADER;
 	while (offset + 2 <= size) {
 		dc_sample_value_t sample = {0};
@@ -176,6 +167,13 @@ vms_sentinel_parser_samples_foreach (dc_parser_t *abstract, dc_sample_callback_t
 		// Depth (1/10 m).
 		sample.depth = depth / 10.0;
 		if (callback) callback (DC_SAMPLE_DEPTH, sample, userdata);
+
+        // Gas change
+        if (gasmix != gasmix_previous) {
+            sample.gasmix = gasmix;
+            if (callback) callback (DC_SAMPLE_GASMIX, sample, userdata);
+            gasmix_previous = gasmix;
+        }
 
 		// Ascent rate
 		if (ascent) {

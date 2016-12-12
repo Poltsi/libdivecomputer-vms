@@ -53,7 +53,7 @@
 
 typedef struct vms_sentinel_device_t {
 	dc_device_t base;
-	serial_t *port;
+	dc_serial_t *port;
 	unsigned char fingerprint[5];
 } vms_sentinel_device_t;
 
@@ -68,6 +68,7 @@ static dc_status_t vms_sentinel_receive_header( dc_device_t *abstract );
 static dc_status_t vms_sentinel_wait_for_idle_byte( dc_device_t *abstract );
 
 static const dc_device_vtable_t vms_sentinel_device_vtable = {
+	sizeof(vms_sentinel_device_t),
 	DC_FAMILY_VMS_SENTINEL,
 	vms_sentinel_device_set_fingerprint, /* set_fingerprint */
 	NULL, /* read */
@@ -81,89 +82,73 @@ dc_status_t
 vms_sentinel_device_open (dc_device_t **out, dc_context_t *context, const char *name)
 {
     DEBUG( context, "Function called: vms_sentinel_device_open");
-	if (out == NULL)
+
+    dc_status_t status = DC_STATUS_SUCCESS;
+    vms_sentinel_device_t *device = NULL;
+
+    if (out == NULL)
 		return DC_STATUS_INVALIDARGS;
 
 	// Allocate memory.
-	vms_sentinel_device_t *device = (vms_sentinel_device_t *) malloc (sizeof (vms_sentinel_device_t));
+	device = (vms_sentinel_device_t *) dc_device_allocate (context, &vms_sentinel_device_vtable);
 	if (device == NULL) {
 		ERROR (context, "Failed to allocate memory.");
 		return DC_STATUS_NOMEMORY;
 	}
-
-	// Initialize the base class.
-	device_init (&device->base, context, &vms_sentinel_device_vtable);
 
 	// Set the default values.
 	device->port = NULL;
 	memset (device->fingerprint, 0, sizeof (device->fingerprint));
 
 	// Open the device.
-	int rc = serial_open (&device->port, context, name);
-	if (rc == -1) {
+    status = dc_serial_open (&device->port, context, name);
+	if (status != DC_STATUS_SUCCESS) {
 		ERROR (context, "Failed to open the serial port.");
-		free (device);
-		return DC_STATUS_IO;
+        goto error_free;
 	}
 
 	// Set the serial communication protocol (9600 8N1).
-	rc = serial_configure (device->port, 9600, 8, SERIAL_PARITY_NONE, 1, SERIAL_FLOWCONTROL_NONE);
-	if (rc == -1) {
+	status = dc_serial_configure (device->port, 9600, 8, DC_PARITY_NONE, DC_STOPBITS_ONE, DC_FLOWCONTROL_NONE);
+	if (status != DC_STATUS_SUCCESS) {
 		ERROR (context, "Failed to set the terminal attributes.");
-		serial_close (device->port);
-		free (device);
-		return DC_STATUS_IO;
+        goto error_close;
 	}
 
-	// Set the timeout for receiving data (1000 ms).
-	if (serial_set_timeout (device->port, 1000) == -1) {
-		ERROR (context, "Failed to set the timeout.");
-		serial_close (device->port);
-		free (device);
-		return DC_STATUS_IO;
-	}
-
-    // If the device is /dev/pts/x then we don't try to clear/set the DTR/RTS as this is a mockup
-    DEBUG( context, "Device name: '%s'", name );
-
-	// Clear the DTR and set the RTS line.
-    if( ! ( strncmp( name, "/dev/pts/", 9 ) == 0 ) ) {
-        DEBUG( context, "Real device: '%s'", name );
-        if (serial_set_dtr (device->port, 0) == -1 ||
-            serial_set_rts (device->port, 1) == -1) {
-            ERROR (context, "Failed to set the DTR/RTS line.");
-            serial_close (device->port);
-            free (device);
-            return DC_STATUS_IO;
-        }
-    } else {
-        DEBUG( context, "Probably mockup device: '%s'", name );
+    // Set the RTS line
+    status = dc_serial_set_rts (device->port, 1);
+    if (status != DC_STATUS_SUCCESS) {
+        ERROR (context, "Failed to set the RTS line.");
+        goto error_close;
     }
 
-	serial_sleep (device->port, 300);
-	serial_flush (device->port, SERIAL_QUEUE_BOTH);
+    dc_serial_sleep (device->port, 200);
+    dc_serial_purge (device->port, DC_DIRECTION_ALL);
 
 	*out = (dc_device_t *) device;
 
 	return DC_STATUS_SUCCESS;
+
+  error_close:
+    dc_serial_close(device->port);
+  error_free:
+    dc_device_deallocate ((dc_device_t *) device);
+    return status;
 }
 
 static dc_status_t
 vms_sentinel_device_close (dc_device_t *abstract)
 {
     DEBUG( abstract->context, "Function called: vms_sentinel_device_close");
+    dc_status_t status = DC_STATUS_SUCCESS;
 	vms_sentinel_device_t *device = (vms_sentinel_device_t *) abstract;
 
 	// Close the device.
-	if (serial_close (device->port) == -1) {
-		free (device);
-		return DC_STATUS_IO;
+    status = dc_serial_close (device->port);
+	if (status != DC_STATUS_SUCCESS) {
+        dc_status_set_error(&status, status);
 	}
 
-	// Free memory.
-	free (device);
-
-	return DC_STATUS_SUCCESS;
+	return status;
 }
 
 static dc_status_t
@@ -188,6 +173,7 @@ static dc_status_t
 vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 {
     DEBUG( abstract->context, "Function called: vms_sentinel_device_dump");
+    dc_status_t status = DC_STATUS_SUCCESS;
 	vms_sentinel_device_t *device = (vms_sentinel_device_t *) abstract;
 
 	// Erase the current contents of the buffer and
@@ -207,22 +193,23 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 
 	// Send the command byte (M) to the dive computer.
 	const unsigned char command[] = {0x4d};
-	int n = serial_write (device->port, command, sizeof (command));
-	if (n != sizeof (command)) {
+	status = dc_serial_write (device->port, command, sizeof (command), NULL);
+	if (status != DC_STATUS_SUCCESS) {
 		ERROR (abstract->context, "Failed to send the command.");
-		return EXITCODE (n);
+		return status;
 	}
 
     /* Call header */
-    dc_status_t rc = vms_sentinel_receive_header( abstract );
+    status = vms_sentinel_receive_header( abstract );
 
-    if( rc != DC_STATUS_SUCCESS )
+    if( status != DC_STATUS_SUCCESS )
     {
-        return( rc );
+        ERROR (abstract->context, "Failed to receive the answer.");
+        return( status );
     }
 
 	unsigned char *data = dc_buffer_get_data (buffer);
-
+    size_t n = 0;
 	unsigned int nbytes = 0;
 	// The end of the divelist is when the rebreather starts sending 'P' characters
 	const unsigned char dend[] = {0x50};
@@ -232,9 +219,9 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 		unsigned int len = 1;
 
 		// Increase the packet size if more data is immediately available.
-		int available = serial_get_received (device->port);
-
-		if (available > len)
+        size_t available = 0;
+        status = dc_serial_get_available (device->port, &available);
+        if (status == DC_STATUS_SUCCESS && available > len)
 		{
 			len = available;
 			DEBUG( abstract->context, "Len modified from default to available: '%d'", len );
@@ -247,7 +234,7 @@ vms_sentinel_device_dump (dc_device_t *abstract, dc_buffer_t *buffer)
 			DEBUG( abstract->context, "Len modified according SZ_MEMORY to: '%d'", len );
 		}
 		// Read the packet.
-		n = serial_read (device->port, data + nbytes, len);
+		status = dc_serial_read (device->port, data + nbytes, len, &n );
 
 		DEBUG( abstract->context, "Read length: %d", n );
 
@@ -310,6 +297,7 @@ dc_status_t
 vms_sentinel_wait_for_idle_byte( dc_device_t *abstract )
 {
     DEBUG( abstract->context, "Function called: vms_sentinel_wait_for_idle_byte");
+    dc_status_t status = DC_STATUS_SUCCESS;
 	vms_sentinel_device_t *device = (vms_sentinel_device_t *) abstract;
 
     /* Let's collect the crap we read from the device here which is not the idle byte */
@@ -325,21 +313,21 @@ vms_sentinel_wait_for_idle_byte( dc_device_t *abstract )
 	}
 
 	unsigned char *data = dc_buffer_get_data( buffer );
-    /* This is our temporal pointer in data to which we print the crap */
-    unsigned char * dp = data;
 
     unsigned char read_byte[ 3 ]  = {0,0,0};
     unsigned char store_byte[ 4 ] = {0,0,0,0};
     /* We expect to get at least 3 consecutive bytes, PPP */
     unsigned char expected[ 4 ]   = {0x50,0x50,0x50,0};
-    int n = serial_read( device->port, read_byte, sizeof( read_byte ) );
+    size_t n = 0;
+
+    status = dc_serial_read( device->port, read_byte, sizeof( read_byte ), &n );
     int p = 0;
     int m = memcmp( store_byte, expected, sizeof( expected ) );
     DEBUG( abstract->context, "Match is %d for %d vs %d bytes", m, sizeof( store_byte ), sizeof( expected ) );
 
     while( m != 0 )
     {
-        n = serial_read( device->port, read_byte, sizeof( read_byte ) );
+        status = dc_serial_read( device->port, read_byte, sizeof( read_byte ), &n );
 
         if( n > 0 )
         {
@@ -356,31 +344,33 @@ vms_sentinel_wait_for_idle_byte( dc_device_t *abstract )
         DEBUG( abstract->context, "Match is %d for %d vs %d bytes", m, sizeof( store_byte ), sizeof( expected ) );
     }
 
-	return DC_STATUS_SUCCESS;
+	return status;
 }
 
 dc_status_t
 vms_sentinel_receive_header( dc_device_t *abstract )
 {
     DEBUG( abstract->context, "Function called: vms_sentinel_receive_header");
+    dc_status_t status = DC_STATUS_SUCCESS;
 	vms_sentinel_device_t *device = (vms_sentinel_device_t *) abstract;
 
 	unsigned char header[3] = {0,0,0};
-    int n = serial_read( device->port, header, sizeof( header ) );
+    size_t n = 0;
+    status = dc_serial_read( device->port, header, sizeof( header ), &n );
     int i = 0;
 	// Wait to receive the header packet for 20 cycles
     while( ( n == 0 ) &&
            (i < 20 ) )
     {
         DEBUG( abstract->context, "Header n is: %d '%s' header size should be '%d'", n, header, sizeof( header ) );
-        n = serial_read( device->port, header, sizeof( header ) );
+        status = dc_serial_read( device->port, header, sizeof( header ), &n );
         i++;
     }
 
 	if (n != sizeof (header)) {
 		DEBUG( abstract->context, "Header n is: %d '%s' header size should be '%d'", n, header, sizeof( header ) );
 		ERROR (abstract->context, "Failed to receive the answer.");
-		return EXITCODE (n);
+		return status;
 	}
     else
     {
@@ -393,21 +383,21 @@ vms_sentinel_receive_header( dc_device_t *abstract )
            ( memcmp( header, expected, sizeof( expected ) ) != 0 ) )
     {
         DEBUG( abstract->context, "Waited for '%s', got something else('%s'), refetching...", expected, header );
-        n = serial_read( device->port, header, sizeof( header ) );
+        status = dc_serial_read( device->port, header, sizeof( header ), &n );
     }
 
 	// Verify the header packet. This should be "d\r\n"
 	if (memcmp (header, expected, sizeof (expected)) != 0) {
 		DEBUG( abstract->context, "Unexpected header byte: '%c' integer is: '%d' string is '%s' hex is 0x%02x",
 				header, header, header, header );
-		return DC_STATUS_PROTOCOL;
+		status = DC_STATUS_PROTOCOL;
 	}
     else
     {
         DEBUG( abstract->context, "Matched header bytes" );
     }
 
-	return DC_STATUS_SUCCESS;
+	return status;
 }
 
 /* Keep in mind that this function takes the dive number, not the index (which starts from 0) as the last argument */
@@ -415,6 +405,8 @@ dc_status_t
 vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned int dive_num )
 {
     DEBUG( abstract->context, "Function called: vms_sentinel_download_dive with dive#: %d", dive_num );
+    dc_status_t status = DC_STATUS_SUCCESS;
+
 	vms_sentinel_device_t *device = (vms_sentinel_device_t *) abstract;
     int tmpint = dive_num;
     int numcount  = 0;
@@ -458,11 +450,12 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
     }
 
     DEBUG( abstract->context, "Sending command: '%s'", command );
+    size_t n = 0;
+	status = dc_serial_write (device->port, command, sizeof (command), &n);
 
-	int n = serial_write (device->port, command, sizeof (command));
-	if (n != sizeof (command)) {
+    if (status != DC_STATUS_SUCCESS){
 		ERROR (abstract->context, "Failed to send the command: %s", command);
-		return EXITCODE (n);
+		return status;
 	}
 
     /* TODO: Store the actual dive data in buf */
@@ -517,7 +510,13 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
 		unsigned int len = 1;
 
 		// Increase the packet size if more data is immediately available.
-		int available = serial_get_received (device->port);
+        size_t available = 0;
+        status = dc_serial_get_available (device->port, &available);
+        if (status == DC_STATUS_SUCCESS && available > len)
+		{
+			len = available;
+			DEBUG( abstract->context, "Len modified from default to available: '%d'", len );
+		}
 
 		if( available > len )
 		{
@@ -533,8 +532,13 @@ vms_sentinel_download_dive( dc_device_t *abstract, unsigned char *buf, unsigned 
 		}
 
 		// Read the packet.
-		n = serial_read( device->port, data + nbytes, len );
+		status = dc_serial_read( device->port, data + nbytes, len, &n );
 
+        if (status != DC_STATUS_SUCCESS)
+        {
+            ERROR (abstract->context, "Failed to receive the answer.");
+            return status;
+        }
         if( ! n )
         {
 			ERROR( abstract->context, "No more data bytes to read, breaking" );
